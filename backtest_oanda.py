@@ -43,8 +43,8 @@ MIN_ATR        = 0.0004
 MAX_BARS_HELD  = 72   # backtest time-stop (3 days on H1, 12 days on H4)
 
 STARTING_BALANCE = 98_946.0   # USD — actual account balance
-RISK_S1          = 0.0175     # 1.75% per S1 trade
-RISK_S2_S3       = 0.020      # 2.0%  per S3 trade
+RISK_S1          = 0.030      # 3.0% per S1 trade
+RISK_S2_S3       = 0.030      # 3.0% per S3 trade
 
 client = API(access_token=API_KEY, environment=ENV)
 
@@ -438,7 +438,6 @@ def backtest_s3_pair(instrument):
         in_trade = False
 
         bar_time = h1.iloc[i]["time"]
-        # Strategy 3 only fires once per day at the first H1 bar at/after 13:00 UTC
         if bar_time.hour < 13:
             continue
         bar_date = bar_time.date()
@@ -456,7 +455,7 @@ def backtest_s3_pair(instrument):
         d1_ema = d1_past["ema200"].iloc[-1]
 
         sig, atr = s3_signal(h1.iloc[i], h1, h4_ema, d1_ema, i)
-        last_date = bar_date  # mark day as checked
+        last_date = bar_date
 
         if not sig:
             continue

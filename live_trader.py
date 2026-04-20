@@ -62,7 +62,7 @@ RSI_OVERSOLD   = 40
 RSI_OVERBOUGHT = 60
 ATR_SL_MULT    = 2.0      # stop loss = entry ± ATR × 2.0
 RR_HARD_TP     = 2.0      # take profit = entry ± SL_dist × 2.0
-MAX_POSITIONS  = 2        # max simultaneous open positions
+MAX_POSITIONS  = 3        # max simultaneous open positions
 SESSION_START  = 7        # UTC — London open
 SESSION_END    = 21       # UTC — NY close
 MIN_ATR        = 0.0004   # skip if market too quiet (< 4 pips)
