@@ -262,115 +262,6 @@ def backtest_s1_pair(name, instrument):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STRATEGY 2 — H4 Fallback (once per day at London open ~07:00 UTC)
-# ══════════════════════════════════════════════════════════════════════════════
-
-def s2_signal(h4_row, h4_df, d1_ema, row_idx):
-    curr = h4_row
-    if pd.isna(curr["ema21"]) or pd.isna(curr["atr"]) or pd.isna(curr["rsi"]) or pd.isna(curr["adx"]):
-        return None, None
-    if curr["atr"] < MIN_ATR:
-        return None, None
-    if curr["adx"] < 25:
-        return None, None
-
-    price       = curr["close"]
-    start       = max(0, row_idx - 21)
-    recent_high = h4_df["high"].iloc[start:row_idx].max()
-    recent_low  = h4_df["low"].iloc[start:row_idx].min()
-    rsi         = curr["rsi"]
-
-    if price > curr["ema21"] and price > d1_ema:
-        if rsi > 65:
-            return None, None
-        if price >= recent_high * 0.999:
-            return None, None
-        return "BUY", curr["atr"]
-
-    if price < curr["ema21"] and price < d1_ema:
-        if rsi < 35:
-            return None, None
-        if price <= recent_low * 1.001:
-            return None, None
-        return "SELL", curr["atr"]
-
-    return None, None
-
-
-def backtest_s2_pair(instrument):
-    name = instrument.replace("_", "")
-    h4 = get_candles(instrument, "H4", 2000)
-    d1 = get_candles(instrument, "D",  500)
-
-    if len(h4) < 25 or len(d1) < 210:
-        return []
-
-    h4 = h4.copy()
-    h4["ema21"] = _ema(h4["close"], 21)
-    h4["atr"]   = _atr(h4, 14)
-    h4["rsi"]   = _rsi(h4["close"], 14)
-    h4["adx"]   = _adx(h4, 14)
-
-    d1 = d1.copy()
-    d1["ema200"] = _ema(d1["close"], 200)
-
-    trades    = []
-    last_date = None
-    in_trade  = False
-    exit_bar  = -1
-
-    for i in range(25, len(h4) - 1):
-        if in_trade and i <= exit_bar:
-            continue
-        in_trade = False
-
-        bar_time = h4.iloc[i]["time"]
-        # Strategy 2 only fires once per day at the first H4 bar at/after 07:00 UTC
-        if bar_time.hour < 7:
-            continue
-        bar_date = bar_time.date()
-        if bar_date == last_date:
-            continue
-
-        d1_past = d1[d1["time"] <= bar_time]
-        if d1_past.empty or pd.isna(d1_past["ema200"].iloc[-1]):
-            continue
-        d1_ema = d1_past["ema200"].iloc[-1]
-
-        sig, atr = s2_signal(h4.iloc[i], h4, d1_ema, i)
-        last_date = bar_date  # mark day as checked regardless
-
-        if not sig:
-            continue
-
-        entry = h4.iloc[i + 1]["open"]
-        sl_d  = atr * ATR_SL_MULT
-        tp_d  = sl_d * RR_HARD_TP
-        sl    = entry - sl_d if sig == "BUY" else entry + sl_d
-        tp    = entry + tp_d if sig == "BUY" else entry - tp_d
-
-        result, bars, exit_time, exit_price = simulate_trade(h4, i + 1, sig, sl, tp, entry)
-        exit_bar = i + 1 + bars
-        in_trade = True
-
-        trades.append({
-            "strategy":    "S2_Fallback",
-            "pair":        name,
-            "side":        sig,
-            "entry_time":  h4.iloc[i]["time"],
-            "exit_time":   exit_time,
-            "result":      result,
-            "bars_held":   bars,
-            "entry_price": entry,
-            "exit_price":  exit_price,
-            "sl_dist":     sl_d,
-            "risk_pct":    RISK_S2_S3,
-        })
-
-    return trades
-
-
-# ══════════════════════════════════════════════════════════════════════════════
 # STRATEGY 3 — H1 Momentum (once per day at NY open ~13:00 UTC)
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -590,88 +481,25 @@ def print_combined(label, df, all_months, start_balance):
 
 def main():
     print("=" * 62)
-    print("  FETCHING DATA...")
+    print(f"  BACKTEST  —  S1 + S3  —  starting ${STARTING_BALANCE:,.0f}")
     print("=" * 62)
 
-    s1_trades = []
-    s2_trades = []
-    s3_trades = []
+    all_trades = []
 
     # ── Strategy 1 ────────────────────────────────────────────────────────────
-    print("\n[Strategy 1 — Main RSI Pullback, 6 pairs]")
+    print("\n[Strategy 1 — RSI Pullback, 6 pairs, hourly]")
     for name, instrument in PAIRS_S1.items():
         trades = backtest_s1_pair(name, instrument)
-        s1_trades.extend(trades)
-
-    # ── Strategy 2 ────────────────────────────────────────────────────────────
-    print("\n[Strategy 2 — H4 Fallback, London open, 6 pairs]")
-    for instrument in PAIRS_S2_S3:
-        name = instrument.replace("_", "")
-        print(f"    {name}...", end=" ", flush=True)
-        trades = backtest_s2_pair(instrument)
-        print(f"{len(trades)} trades")
-        s2_trades.extend(trades)
+        all_trades.extend(trades)
 
     # ── Strategy 3 ────────────────────────────────────────────────────────────
-    print("\n[Strategy 3 — H1 Momentum, NY open, 6 pairs]")
+    print("\n[Strategy 3 — H1 Momentum, 6 pairs, 13:00 UTC daily]")
     for instrument in PAIRS_S2_S3:
         name = instrument.replace("_", "")
         print(f"    {name}...", end=" ", flush=True)
         trades = backtest_s3_pair(instrument)
         print(f"{len(trades)} trades")
-        s3_trades.extend(trades)
-
-    all_trades    = s1_trades + s2_trades + s3_trades
-    without_s2    = s1_trades + s3_trades
-
-    if not all_trades:
-        print("\nNo trades generated.")
-        return
-
-    df_with    = pd.DataFrame(all_trades)
-    df_without = pd.DataFrame(without_s2)
-
-    for df in [df_with, df_without]:
-        df["entry_time"] = pd.to_datetime(df["entry_time"])
-        df["month"]      = df["entry_time"].dt.to_period("M")
-
-    all_months = sorted(df_with["month"].unique())
-
-    # ── Side-by-side comparison ───────────────────────────────────────────────
-    print_combined(
-        f"WITHOUT Strategy 2  (S1 + S3 only)  — starting ${STARTING_BALANCE:,.0f}",
-        df_without, all_months, STARTING_BALANCE)
-
-    print_combined(
-        f"WITH Strategy 2     (S1 + S2 + S3)  — starting ${STARTING_BALANCE:,.0f}",
-        df_with, all_months, STARTING_BALANCE)
-
-    # ── Strategy 2 standalone damage ─────────────────────────────────────────
-    print(f"\n{'=' * 62}")
-    print("  Strategy 2 STANDALONE (what it adds/costs on its own)")
-    print(f"{'=' * 62}")
-    df_s2 = pd.DataFrame(s2_trades) if s2_trades else pd.DataFrame()
-    if not df_s2.empty:
-        df_s2["entry_time"] = pd.to_datetime(df_s2["entry_time"])
-        df_s2["month"]      = df_s2["entry_time"].dt.to_period("M")
-        df_s2_pnl, s2_final, s2_dd = add_pnl(df_s2.copy(), STARTING_BALANCE)
-        s2_net = s2_final - STARTING_BALANCE
-        wins   = len(df_s2_pnl[df_s2_pnl["result"] == "WIN"])
-        total  = len(df_s2_pnl)
-        print(f"  Trades: {total}  Win rate: {wins/total*100:.0f}%  "
-              f"Net P&L: ${s2_net:+,.0f}  Max drawdown: {s2_dd:.1f}%")
-        print()
-        print(f"  {'Month':<10} {'Trades':>7} {'Win%':>6} {'P&L':>10}")
-        running_bal = STARTING_BALANCE
-        for m in sorted(all_months):
-            mt = df_s2_pnl[df_s2_pnl["month"] == m]
-            if mt.empty:
-                continue
-            mw   = mt[mt["result"] == "WIN"]
-            mwr  = len(mw) / len(mt) * 100 if len(mt) > 0 else 0
-            mpnl = mt["pnl"].sum()
-            running_bal += mpnl
-            print(f"  {str(m):<10} {len(mt):>7} {mwr:>5.0f}%  ${mpnl:>+8,.0f}")
+        all_trades.extend(trades)
 
     if not all_trades:
         print("\nNo trades generated.")
@@ -682,24 +510,15 @@ def main():
     df["month"]      = df["entry_time"].dt.to_period("M")
     all_months       = sorted(df["month"].unique())
 
-    # ── Per-strategy summary ─────────────────────────────────────────────────
-    print("\n" + "=" * 60)
-    print(f"  RESULTS BY STRATEGY  (starting balance: ${STARTING_BALANCE:,.0f})")
-    print("=" * 60)
-
-    label_map = {
-        "S1_Main":  "Strategy 1 — Main RSI Pullback (H1, 6 pairs)",
-        "S3_H1Mom": "Strategy 3 — H1 Momentum     (H1, 6 pairs, 13:00 UTC)",
-    }
-    for strat in ["S1_Main", "S3_H1Mom"]:
-        print_strategy_summary(label_map[strat], df[df["strategy"] == strat].copy(),
+    # ── Per-strategy breakdown ────────────────────────────────────────────────
+    for strat, label in [
+        ("S1_Main",  "Strategy 1 — RSI Pullback  (H1, 6 pairs, hourly)"),
+        ("S3_H1Mom", "Strategy 3 — H1 Momentum  (H1, 6 pairs, 13:00 UTC)"),
+    ]:
+        print_strategy_summary(label, df[df["strategy"] == strat].copy(),
                                all_months, STARTING_BALANCE)
 
-    # ── Combined monthly totals ───────────────────────────────────────────────
-    print("\n" + "=" * 60)
-    print(f"  COMBINED — all 3 strategies, starting ${STARTING_BALANCE:,.0f}")
-    print("=" * 60)
-
+    # ── Combined ──────────────────────────────────────────────────────────────
     df_all, final_bal, max_dd = add_pnl(df.copy(), STARTING_BALANCE)
     wins    = len(df_all[df_all["result"] == "WIN"])
     losses  = len(df_all[df_all["result"] == "LOSS"])
@@ -708,10 +527,13 @@ def main():
     net     = final_bal - STARTING_BALANCE
     net_pct = net / STARTING_BALANCE * 100
 
+    print(f"\n{'=' * 62}")
+    print(f"  COMBINED  (S1 + S3)")
+    print(f"{'=' * 62}")
     print(f"  Trades: {total}  ({wins}W / {losses}L / {timeout} timeout)  "
           f"Win rate: {wins/total*100:.0f}%  Avg/month: {total/len(all_months):.1f}")
     print(f"  Net P&L: ${net:+,.0f}  ({net_pct:+.1f}%)  |  "
-          f"Max drawdown: {max_dd:.1f}%  |  Final balance: ${final_bal:,.0f}")
+          f"Max drawdown: {max_dd:.1f}%  |  Final: ${final_bal:,.0f}")
     print()
     print(f"  {'Month':<10} {'Trades':>7} {'Win%':>6} {'P&L':>10} {'Balance':>10}")
     running_bal = STARTING_BALANCE
@@ -725,8 +547,7 @@ def main():
         running_bal += mpnl
         print(f"  {str(m):<10} {len(mt):>7} {mwr:>5.0f}%  "
               f"${mpnl:>+8,.0f}  ${running_bal:>9,.0f}")
-
-    print("=" * 60)
+    print("=" * 62)
 
 
 if __name__ == "__main__":

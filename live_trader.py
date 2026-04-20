@@ -534,165 +534,12 @@ def run_signals(dry_run: bool = False):
         log.error(f"Unexpected error in run_signals: {e} — will retry next hour")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# FALLBACK STRATEGY — London Open Momentum
-# Fires once per day at 07:02 UTC if no trade has been placed today yet.
-# Logic: trade in the direction of the H4 EMA21 trend, confirmed by D1 EMA200.
-# Uses 1.0% risk (lower quality setup than the main strategy).
-# ══════════════════════════════════════════════════════════════════════════════
-
-FALLBACK_RISK    = 0.030   # 3.0% risk per trade
-FALLBACK_PAIRS   = ["EUR_USD", "GBP_USD", "USD_CAD", "AUD_USD", "NZD_USD", "GBP_JPY"]
-
-# Track the last date a fallback trade was placed (prevents multiple per day)
-_fallback_last_date: str = ""
+S3_RISK  = 0.030   # 3.0% risk per trade
+S3_PAIRS = ["EUR_USD", "GBP_USD", "USD_CAD", "AUD_USD", "NZD_USD", "GBP_JPY"]
 
 
 def _today_utc() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-
-def _trade_placed_today(open_trades: list) -> bool:
-    """Return True if any trade was opened today (UTC)."""
-    today = _today_utc()
-    for t in open_trades:
-        open_time = _parse_oanda_time(t["openTime"])
-        if open_time.strftime("%Y-%m-%d") == today:
-            return True
-    return False
-
-
-def get_fallback_signal(instrument: str):
-    """
-    H4 trend-follow signal with quality filters.
-    Returns ("BUY" | "SELL" | None, atr)
-
-    Filters added vs original:
-      - RSI must not be overbought (BUY) or oversold (SELL) on H4
-      - Price must not be at a 20-bar high (BUY) or low (SELL) — avoids chasing
-      - ADX > 20 — some trend must be present
-    """
-    h4 = get_candles(instrument, "H4", 80)
-    d1 = get_candles(instrument, "D",  250)
-
-    if len(h4) < 25 or len(d1) < 210:
-        return None, None
-
-    h4 = h4.copy()
-    h4["ema21"] = _ema(h4["close"], 21)
-    h4["atr"]   = _atr(h4, 14)
-    h4["rsi"]   = _rsi(h4["close"], 14)
-    h4["adx"]   = _adx(h4, 14)
-
-    d1 = d1.copy()
-    d1["ema200"] = _ema(d1["close"], 200)
-
-    curr_h4 = h4.iloc[-2]   # last completed H4 bar
-    d1_ema  = d1["ema200"].iloc[-1]
-
-    if pd.isna(curr_h4["ema21"]) or pd.isna(curr_h4["atr"]) or pd.isna(d1_ema):
-        return None, None
-    if pd.isna(curr_h4["rsi"]) or pd.isna(curr_h4["adx"]):
-        return None, None
-
-    if curr_h4["atr"] < MIN_ATR:
-        return None, None
-
-    # ADX filter — skip ranging markets
-    if curr_h4["adx"] < 20:
-        return None, None
-
-    price        = curr_h4["close"]
-    recent_high  = h4["high"].iloc[-22:-2].max()   # 20-bar high (excluding current)
-    recent_low   = h4["low"].iloc[-22:-2].min()
-    rsi          = curr_h4["rsi"]
-
-    # Both H4 EMA21 and D1 EMA200 must agree on direction
-    if price > curr_h4["ema21"] and price > d1_ema:
-        if rsi > 65:
-            return None, None        # overbought — don't chase
-        if price >= recent_high * 0.999:
-            return None, None        # price at 20-bar high — don't chase
-        return "BUY", curr_h4["atr"]
-
-    if price < curr_h4["ema21"] and price < d1_ema:
-        if rsi < 35:
-            return None, None        # oversold — don't chase
-        if price <= recent_low * 1.001:
-            return None, None        # price at 20-bar low — don't chase
-        return "SELL", curr_h4["atr"]
-
-    return None, None
-
-
-def run_fallback(dry_run: bool = False):
-    """
-    Fallback strategy: runs at 07:02 UTC daily.
-    Places 1 trade on the strongest trending pair if no trade has been placed today.
-    """
-    global _fallback_last_date
-
-    today = _today_utc()
-    if _fallback_last_date == today:
-        return   # already ran today
-
-    log.info("─" * 60)
-    log.info(f"Fallback check  {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
-
-    try:
-        balance     = get_balance()
-        open_trades = get_open_trades()
-        n_open      = len(open_trades)
-
-        # Skip if main strategy already traded today or max positions reached
-        if _trade_placed_today(open_trades):
-            log.info("  Fallback: main strategy already traded today — skipping")
-            _fallback_last_date = today
-            return
-
-        if n_open >= MAX_POSITIONS:
-            log.info(f"  Fallback: max positions reached ({MAX_POSITIONS}) — skipping")
-            _fallback_last_date = today
-            return
-
-        open_insts = {t["instrument"] for t in open_trades}
-
-        placed = False
-        for instrument in FALLBACK_PAIRS:
-            if instrument in open_insts:
-                continue
-            if correlation_blocked(instrument, "BUY", open_trades):
-                continue   # rough check — will be re-checked per signal below
-
-            try:
-                signal, atr = get_fallback_signal(instrument)
-            except Exception as e:
-                log.warning(f"  Fallback {instrument}: error — {e}")
-                continue
-
-            if signal is None:
-                log.debug(f"  Fallback {instrument}: no signal")
-                continue
-
-            if correlation_blocked(instrument, signal, open_trades):
-                log.info(f"  Fallback {instrument}: {signal} blocked (correlation)")
-                continue
-
-            log.info(f"  FALLBACK SIGNAL  {signal}  {instrument}  [1.0% risk]")
-            place_order(instrument, signal, atr, FALLBACK_RISK, balance, dry_run=dry_run)
-            placed = True
-            break   # one trade per day only
-
-        if not placed:
-            log.info("  Fallback: no valid setup found on any pair today")
-
-        _fallback_last_date = today
-
-    except V20Error as e:
-        log.error(f"Fallback OANDA API error: {e} — will retry next hour")
-        # Don't set _fallback_last_date so it retries on next hourly check
-    except Exception as e:
-        log.error(f"Fallback unexpected error: {e} — will retry next hour")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -792,7 +639,7 @@ def run_h1_strategy(dry_run: bool = False):
         open_insts = {t["instrument"] for t in open_trades}
 
         placed = False
-        for instrument in FALLBACK_PAIRS:
+        for instrument in S3_PAIRS:
             if instrument in open_insts:
                 continue
 
@@ -810,8 +657,8 @@ def run_h1_strategy(dry_run: bool = False):
                 log.info(f"  H1 Strategy {instrument}: {signal} blocked (correlation)")
                 continue
 
-            log.info(f"  H1 STRATEGY SIGNAL  {signal}  {instrument}  [1.0% risk]")
-            place_order(instrument, signal, atr, FALLBACK_RISK, balance, dry_run=dry_run)
+            log.info(f"  H1 STRATEGY SIGNAL  {signal}  {instrument}  [3.0% risk]")
+            place_order(instrument, signal, atr, S3_RISK, balance, dry_run=dry_run)
             placed = True
             break
 
