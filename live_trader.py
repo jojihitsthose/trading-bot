@@ -615,7 +615,7 @@ def get_h1_signal(instrument: str):
 def run_h1_strategy(dry_run: bool = False):
     """
     Strategy 3: runs at 13:02 UTC daily (NY open).
-    Places 1 trade if positions are available.
+    Scans ALL 6 pairs and enters every valid signal found — no position cap.
     """
     global _h1_strat_last_date
 
@@ -629,18 +629,12 @@ def run_h1_strategy(dry_run: bool = False):
     try:
         balance     = get_balance()
         open_trades = get_open_trades()
-        n_open      = len(open_trades)
+        open_insts  = {t["instrument"] for t in open_trades}
 
-        if n_open >= MAX_POSITIONS:
-            log.info(f"  H1 Strategy: max positions reached ({MAX_POSITIONS}) — skipping")
-            _h1_strat_last_date = today
-            return
-
-        open_insts = {t["instrument"] for t in open_trades}
-
-        placed = False
+        signals_found = 0
         for instrument in S3_PAIRS:
             if instrument in open_insts:
+                log.debug(f"  H1 Strategy {instrument}: already in trade")
                 continue
 
             try:
@@ -653,17 +647,20 @@ def run_h1_strategy(dry_run: bool = False):
                 log.debug(f"  H1 Strategy {instrument}: no signal")
                 continue
 
-            if correlation_blocked(instrument, signal, open_trades):
-                log.info(f"  H1 Strategy {instrument}: {signal} blocked (correlation)")
-                continue
-
             log.info(f"  H1 STRATEGY SIGNAL  {signal}  {instrument}  [3.0% risk]")
             place_order(instrument, signal, atr, S3_RISK, balance, dry_run=dry_run)
-            placed = True
-            break
+            signals_found += 1
 
-        if not placed:
+            # Refresh balance after each order so sizing stays accurate
+            if not dry_run:
+                balance    = get_balance()
+                open_trades = get_open_trades()
+                open_insts  = {t["instrument"] for t in open_trades}
+
+        if signals_found == 0:
             log.info("  H1 Strategy: no valid setup found today")
+        else:
+            log.info(f"  H1 Strategy: placed {signals_found} trade(s) today")
 
         _h1_strat_last_date = today
 
