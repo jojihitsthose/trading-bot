@@ -543,7 +543,7 @@ def run_signals(dry_run: bool = False):
 # Uses 1.0% risk (lower quality setup than the main strategy).
 # ══════════════════════════════════════════════════════════════════════════════
 
-FALLBACK_RISK    = 0.020   # 2.0% risk per trade
+FALLBACK_RISK    = 0.030   # 3.0% risk per trade
 FALLBACK_PAIRS   = ["EUR_USD", "GBP_USD", "USD_CAD", "AUD_USD", "NZD_USD", "GBP_JPY"]
 
 # Track the last date a fallback trade was placed (prevents multiple per day)
