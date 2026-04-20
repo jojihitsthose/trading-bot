@@ -61,7 +61,7 @@ ADX_STRONG     = 36
 RSI_OVERSOLD   = 40
 RSI_OVERBOUGHT = 60
 ATR_SL_MULT    = 2.0      # stop loss = entry ± ATR × 2.0
-RR_HARD_TP     = 1.5      # take profit = entry ± SL_dist × 1.5
+RR_HARD_TP     = 2.0      # take profit = entry ± SL_dist × 2.0
 MAX_POSITIONS  = 2        # max simultaneous open positions
 SESSION_START  = 7        # UTC — London open
 SESSION_END    = 21       # UTC — NY close
@@ -543,8 +543,8 @@ def run_signals(dry_run: bool = False):
 # Uses 1.0% risk (lower quality setup than the main strategy).
 # ══════════════════════════════════════════════════════════════════════════════
 
-FALLBACK_RISK    = 0.010   # 1.0% risk per fallback trade
-FALLBACK_PAIRS   = ["EUR_USD", "GBP_USD", "USD_CAD"]   # most liquid, tightest spreads
+FALLBACK_RISK    = 0.020   # 2.0% risk per trade
+FALLBACK_PAIRS   = ["EUR_USD", "GBP_USD", "USD_CAD", "AUD_USD", "NZD_USD", "GBP_JPY"]
 
 # Track the last date a fallback trade was placed (prevents multiple per day)
 _fallback_last_date: str = ""

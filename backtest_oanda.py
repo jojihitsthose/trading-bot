@@ -30,17 +30,21 @@ PAIRS_S1 = {
     "GBPJPY": "GBP_JPY",
     "NZDUSD": "NZD_USD",
 }
-PAIRS_S2_S3 = ["EUR_USD", "GBP_USD", "USD_CAD"]   # liquid pairs only
+PAIRS_S2_S3 = ["EUR_USD", "GBP_USD", "USD_CAD", "AUD_USD", "NZD_USD", "GBP_JPY"]
 
 ADX_WEAK       = 28
 RSI_OVERSOLD   = 40
 RSI_OVERBOUGHT = 60
 ATR_SL_MULT    = 2.0
-RR_HARD_TP     = 1.5
+RR_HARD_TP     = 2.0
 SESSION_START  = 7
 SESSION_END    = 21
 MIN_ATR        = 0.0004
 MAX_BARS_HELD  = 72   # backtest time-stop (3 days on H1, 12 days on H4)
+
+STARTING_BALANCE = 98_946.0   # USD — actual account balance
+RISK_S1          = 0.0175     # 1.75% per S1 trade
+RISK_S2_S3       = 0.020      # 2.0%  per S3 trade
 
 client = API(access_token=API_KEY, environment=ENV)
 
@@ -101,27 +105,48 @@ def _adx(df, period=14):
 
 # ── Simulate trade outcome bar-by-bar ─────────────────────────────────────────
 
-def simulate_trade(bars_df, entry_idx, side, sl, tp):
+def simulate_trade(bars_df, entry_idx, side, sl, tp, entry_price):
     """
-    Walk forward from entry_idx+1 and return (result, bars_held, exit_time).
+    Walk forward from entry_idx+1.
+    Returns (result, bars_held, exit_time, exit_price)
     result = 'WIN' | 'LOSS' | 'TIMEOUT'
     """
     for j in range(1, MAX_BARS_HELD + 1):
         k = entry_idx + j
         if k >= len(bars_df):
-            return "TIMEOUT", j, bars_df.iloc[-1]["time"]
+            last = bars_df.iloc[-1]
+            return "TIMEOUT", j, last["time"], last["close"]
         bar = bars_df.iloc[k]
         if side == "BUY":
             if bar["low"] <= sl:
-                return "LOSS", j, bar["time"]
+                return "LOSS", j, bar["time"], sl
             if bar["high"] >= tp:
-                return "WIN", j, bar["time"]
+                return "WIN", j, bar["time"], tp
         else:
             if bar["high"] >= sl:
-                return "LOSS", j, bar["time"]
+                return "LOSS", j, bar["time"], sl
             if bar["low"] <= tp:
-                return "WIN", j, bar["time"]
-    return "TIMEOUT", MAX_BARS_HELD, bars_df.iloc[entry_idx + MAX_BARS_HELD]["time"]
+                return "WIN", j, bar["time"], tp
+    last_k = min(entry_idx + MAX_BARS_HELD, len(bars_df) - 1)
+    last   = bars_df.iloc[last_k]
+    return "TIMEOUT", MAX_BARS_HELD, last["time"], last["close"]
+
+
+def calc_pnl(risk_usd, result, entry_price, exit_price, side, sl_dist):
+    """
+    WIN   → +risk * RR
+    LOSS  → -risk
+    TIMEOUT → actual price move scaled to risk
+    """
+    if result == "WIN":
+        return risk_usd * RR_HARD_TP
+    if result == "LOSS":
+        return -risk_usd
+    # TIMEOUT: scale actual price move against the SL distance
+    if sl_dist == 0:
+        return 0.0
+    move = (exit_price - entry_price) if side == "BUY" else (entry_price - exit_price)
+    return risk_usd * (move / sl_dist)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -214,18 +239,22 @@ def backtest_s1_pair(name, instrument):
         sl    = entry - sl_d if sig == "BUY" else entry + sl_d
         tp    = entry + tp_d if sig == "BUY" else entry - tp_d
 
-        result, bars, exit_time = simulate_trade(h1, i + 1, sig, sl, tp)
+        result, bars, exit_time, exit_price = simulate_trade(h1, i + 1, sig, sl, tp, entry)
         exit_bar = i + 1 + bars
         in_trade = True
 
         trades.append({
-            "strategy":   "S1_Main",
-            "pair":       name,
-            "side":       sig,
-            "entry_time": h1.iloc[i]["time"],
-            "exit_time":  exit_time,
-            "result":     result,
-            "bars_held":  bars,
+            "strategy":    "S1_Main",
+            "pair":        name,
+            "side":        sig,
+            "entry_time":  h1.iloc[i]["time"],
+            "exit_time":   exit_time,
+            "result":      result,
+            "bars_held":   bars,
+            "entry_price": entry,
+            "exit_price":  exit_price,
+            "sl_dist":     sl_d,
+            "risk_pct":    RISK_S1,
         })
 
     print(f"{len(trades)} trades")
@@ -242,7 +271,7 @@ def s2_signal(h4_row, h4_df, d1_ema, row_idx):
         return None, None
     if curr["atr"] < MIN_ATR:
         return None, None
-    if curr["adx"] < 20:
+    if curr["adx"] < 25:
         return None, None
 
     price       = curr["close"]
@@ -320,18 +349,22 @@ def backtest_s2_pair(instrument):
         sl    = entry - sl_d if sig == "BUY" else entry + sl_d
         tp    = entry + tp_d if sig == "BUY" else entry - tp_d
 
-        result, bars, exit_time = simulate_trade(h4, i + 1, sig, sl, tp)
+        result, bars, exit_time, exit_price = simulate_trade(h4, i + 1, sig, sl, tp, entry)
         exit_bar = i + 1 + bars
         in_trade = True
 
         trades.append({
-            "strategy":   "S2_Fallback",
-            "pair":       name,
-            "side":       sig,
-            "entry_time": h4.iloc[i]["time"],
-            "exit_time":  exit_time,
-            "result":     result,
-            "bars_held":  bars,
+            "strategy":    "S2_Fallback",
+            "pair":        name,
+            "side":        sig,
+            "entry_time":  h4.iloc[i]["time"],
+            "exit_time":   exit_time,
+            "result":      result,
+            "bars_held":   bars,
+            "entry_price": entry,
+            "exit_price":  exit_price,
+            "sl_dist":     sl_d,
+            "risk_pct":    RISK_S2_S3,
         })
 
     return trades
@@ -434,18 +467,22 @@ def backtest_s3_pair(instrument):
         sl    = entry - sl_d if sig == "BUY" else entry + sl_d
         tp    = entry + tp_d if sig == "BUY" else entry - tp_d
 
-        result, bars, exit_time = simulate_trade(h1, i + 1, sig, sl, tp)
+        result, bars, exit_time, exit_price = simulate_trade(h1, i + 1, sig, sl, tp, entry)
         exit_bar = i + 1 + bars
         in_trade = True
 
         trades.append({
-            "strategy":   "S3_H1Mom",
-            "pair":       name,
-            "side":       sig,
-            "entry_time": h1.iloc[i]["time"],
-            "exit_time":  exit_time,
-            "result":     result,
-            "bars_held":  bars,
+            "strategy":    "S3_H1Mom",
+            "pair":        name,
+            "side":        sig,
+            "entry_time":  h1.iloc[i]["time"],
+            "exit_time":   exit_time,
+            "result":      result,
+            "bars_held":   bars,
+            "entry_price": entry,
+            "exit_price":  exit_price,
+            "sl_dist":     sl_d,
+            "risk_pct":    RISK_S2_S3,
         })
 
     return trades
@@ -453,30 +490,69 @@ def backtest_s3_pair(instrument):
 
 # ── Print helpers ─────────────────────────────────────────────────────────────
 
-def print_strategy_summary(label, trades_df, all_months):
+def add_pnl(df, start_balance):
+    """Add risk_usd and pnl columns; return final balance and max drawdown."""
+    df = df.sort_values("entry_time").copy()
+    balance  = start_balance
+    peak     = start_balance
+    max_dd   = 0.0
+    pnl_list = []
+    bal_list = []
+
+    for _, row in df.iterrows():
+        risk_usd = balance * row["risk_pct"]
+        pnl      = calc_pnl(risk_usd, row["result"], row["entry_price"],
+                            row["exit_price"], row["side"], row["sl_dist"])
+        balance += pnl
+        peak     = max(peak, balance)
+        dd       = (peak - balance) / peak * 100
+        max_dd   = max(max_dd, dd)
+        pnl_list.append(pnl)
+        bal_list.append(balance)
+
+    df["pnl"]     = pnl_list
+    df["balance"] = bal_list
+    return df, balance, max_dd
+
+
+def print_strategy_summary(label, trades_df, all_months, start_balance):
     if trades_df.empty:
         print(f"  {label}: no trades")
         return
 
-    wins   = len(trades_df[trades_df["result"] == "WIN"])
-    total  = len(trades_df)
-    wr     = wins / total * 100 if total > 0 else 0
-    months = trades_df["month"].nunique()
-    tpm    = total / months if months > 0 else 0
+    trades_df, final_bal, max_dd = add_pnl(trades_df, start_balance)
 
-    print(f"\n  {'─'*54}")
+    wins    = len(trades_df[trades_df["result"] == "WIN"])
+    losses  = len(trades_df[trades_df["result"] == "LOSS"])
+    timeout = len(trades_df[trades_df["result"] == "TIMEOUT"])
+    total   = len(trades_df)
+    wr      = wins / total * 100 if total > 0 else 0
+    months  = trades_df["month"].nunique()
+    tpm     = total / months if months > 0 else 0
+    net     = final_bal - start_balance
+    net_pct = net / start_balance * 100
+
+    print(f"\n  {'─'*60}")
     print(f"  {label}")
-    print(f"  {'─'*54}")
-    print(f"  Total trades: {total}  |  Win rate: {wr:.0f}%  |  Avg/month: {tpm:.1f}")
+    print(f"  {'─'*60}")
+    print(f"  Trades: {total}  ({wins}W / {losses}L / {timeout} timeout)  "
+          f"Win rate: {wr:.0f}%  Avg/month: {tpm:.1f}")
+    print(f"  Net P&L: ${net:+,.0f}  ({net_pct:+.1f}%)  |  "
+          f"Max drawdown: {max_dd:.1f}%  |  Final balance: ${final_bal:,.0f}")
     print()
 
-    # Monthly breakdown
-    print(f"  {'Month':<10} {'Trades':>7} {'Wins':>6} {'Win%':>6}")
+    print(f"  {'Month':<10} {'Trades':>7} {'Win%':>6} {'P&L':>10} {'Balance':>10}")
+    running_bal = start_balance
     for m in sorted(all_months):
         mt  = trades_df[trades_df["month"] == m]
-        mw  = mt[mt["result"] == "WIN"]
-        mwr = len(mw) / len(mt) * 100 if len(mt) > 0 else 0
-        print(f"  {str(m):<10} {len(mt):>7} {len(mw):>6} {mwr:>5.0f}%")
+        if mt.empty:
+            continue
+        mw    = mt[mt["result"] == "WIN"]
+        mwr   = len(mw) / len(mt) * 100 if len(mt) > 0 else 0
+        mpnl  = mt["pnl"].sum()
+        running_bal += mpnl
+        print(f"  {str(m):<10} {len(mt):>7} {mwr:>5.0f}%  "
+              f"${mpnl:>+8,.0f}  ${running_bal:>9,.0f}")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -492,15 +568,6 @@ def main():
     print("\n[Strategy 1 — Main RSI Pullback, H1 signal, 6 pairs]")
     for name, instrument in PAIRS_S1.items():
         trades = backtest_s1_pair(name, instrument)
-        all_trades.extend(trades)
-
-    # ── Strategy 2: H4 Fallback ───────────────────────────────────────────────
-    print("\n[Strategy 2 — H4 Fallback, London open, 3 pairs]")
-    for instrument in PAIRS_S2_S3:
-        name = instrument.replace("_", "")
-        print(f"    {name}...", end=" ", flush=True)
-        trades = backtest_s2_pair(instrument)
-        print(f"{len(trades)} trades")
         all_trades.extend(trades)
 
     # ── Strategy 3: H1 Momentum ───────────────────────────────────────────────
@@ -523,32 +590,47 @@ def main():
 
     # ── Per-strategy summary ─────────────────────────────────────────────────
     print("\n" + "=" * 60)
-    print("  RESULTS BY STRATEGY")
+    print(f"  RESULTS BY STRATEGY  (starting balance: ${STARTING_BALANCE:,.0f})")
     print("=" * 60)
 
-    for strat in ["S1_Main", "S2_Fallback", "S3_H1Mom"]:
-        label_map = {
-            "S1_Main":     "Strategy 1 — Main RSI Pullback (H1, 6 pairs)",
-            "S2_Fallback": "Strategy 2 — H4 Fallback     (H4, 3 pairs, 07:00 UTC)",
-            "S3_H1Mom":    "Strategy 3 — H1 Momentum     (H1, 3 pairs, 13:00 UTC)",
-        }
-        print_strategy_summary(label_map[strat], df[df["strategy"] == strat], all_months)
+    label_map = {
+        "S1_Main":  "Strategy 1 — Main RSI Pullback (H1, 6 pairs)",
+        "S3_H1Mom": "Strategy 3 — H1 Momentum     (H1, 6 pairs, 13:00 UTC)",
+    }
+    for strat in ["S1_Main", "S3_H1Mom"]:
+        print_strategy_summary(label_map[strat], df[df["strategy"] == strat].copy(),
+                               all_months, STARTING_BALANCE)
 
     # ── Combined monthly totals ───────────────────────────────────────────────
     print("\n" + "=" * 60)
-    print("  COMBINED (all 3 strategies, all pairs)")
+    print(f"  COMBINED — all 3 strategies, starting ${STARTING_BALANCE:,.0f}")
     print("=" * 60)
-    wins  = len(df[df["result"] == "WIN"])
-    total = len(df)
-    print(f"  Total: {total} trades  |  Win rate: {wins/total*100:.0f}%  "
-          f"|  Avg/month: {total/len(all_months):.1f}")
+
+    df_all, final_bal, max_dd = add_pnl(df.copy(), STARTING_BALANCE)
+    wins    = len(df_all[df_all["result"] == "WIN"])
+    losses  = len(df_all[df_all["result"] == "LOSS"])
+    timeout = len(df_all[df_all["result"] == "TIMEOUT"])
+    total   = len(df_all)
+    net     = final_bal - STARTING_BALANCE
+    net_pct = net / STARTING_BALANCE * 100
+
+    print(f"  Trades: {total}  ({wins}W / {losses}L / {timeout} timeout)  "
+          f"Win rate: {wins/total*100:.0f}%  Avg/month: {total/len(all_months):.1f}")
+    print(f"  Net P&L: ${net:+,.0f}  ({net_pct:+.1f}%)  |  "
+          f"Max drawdown: {max_dd:.1f}%  |  Final balance: ${final_bal:,.0f}")
     print()
-    print(f"  {'Month':<10} {'Trades':>7} {'Wins':>6} {'Win%':>6}")
+    print(f"  {'Month':<10} {'Trades':>7} {'Win%':>6} {'P&L':>10} {'Balance':>10}")
+    running_bal = STARTING_BALANCE
     for m in all_months:
-        mt  = df[df["month"] == m]
-        mw  = mt[mt["result"] == "WIN"]
-        mwr = len(mw) / len(mt) * 100 if len(mt) > 0 else 0
-        print(f"  {str(m):<10} {len(mt):>7} {len(mw):>6} {mwr:>5.0f}%")
+        mt   = df_all[df_all["month"] == m]
+        if mt.empty:
+            continue
+        mw   = mt[mt["result"] == "WIN"]
+        mwr  = len(mw) / len(mt) * 100 if len(mt) > 0 else 0
+        mpnl = mt["pnl"].sum()
+        running_bal += mpnl
+        print(f"  {str(m):<10} {len(mt):>7} {mwr:>5.0f}%  "
+              f"${mpnl:>+8,.0f}  ${running_bal:>9,.0f}")
 
     print("=" * 60)
 
