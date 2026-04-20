@@ -478,10 +478,12 @@ def run_signals(dry_run: bool = False):
         # Detect any trades that closed since last check
         check_for_closed_trades(open_trades)
 
-        # Catch-up: run fallback if it hasn't fired today and it's past 07:00 UTC
+        # Catch-up: run strategies if they haven't fired today
         now_utc = datetime.now(timezone.utc)
         if now_utc.hour >= 7 and _fallback_last_date != _today_utc():
             run_fallback(dry_run=dry_run)
+        if now_utc.hour >= 13 and _h1_strat_last_date != _today_utc():
+            run_h1_strategy(dry_run=dry_run)
 
         log.info(f"  Balance: ${balance:,.2f}  |  Open trades: {n_open}/{MAX_POSITIONS}")
 
@@ -696,6 +698,137 @@ def run_fallback(dry_run: bool = False):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# STRATEGY 3 — H1 Momentum (NY Open)
+# Fires once per day at 13:02 UTC (NY open) if fewer than 2 positions are open.
+# Uses H1 ATR for tighter SL/TP — faster resolution than Strategy 2.
+# Direction confirmed by H4 EMA21 + D1 EMA200.
+# ══════════════════════════════════════════════════════════════════════════════
+
+_h1_strat_last_date: str = ""
+
+
+def get_h1_signal(instrument: str):
+    """
+    H1-based momentum signal with H4 + D1 trend confirmation.
+    Returns ("BUY" | "SELL" | None, atr)
+    """
+    h1 = get_candles(instrument, "H1", 100)
+    h4 = get_candles(instrument, "H4", 60)
+    d1 = get_candles(instrument, "D",  250)
+
+    if len(h1) < 30 or len(h4) < 25 or len(d1) < 210:
+        return None, None
+
+    h1 = h1.copy()
+    h1["ema21"] = _ema(h1["close"], 21)
+    h1["atr"]   = _atr(h1, 14)
+    h1["rsi"]   = _rsi(h1["close"], 14)
+    h1["adx"]   = _adx(h1, 14)
+
+    h4 = h4.copy()
+    h4["ema21"] = _ema(h4["close"], 21)
+
+    d1 = d1.copy()
+    d1["ema200"] = _ema(d1["close"], 200)
+
+    curr    = h1.iloc[-2]   # last completed H1 bar
+    h4_ema  = h4["ema21"].iloc[-1]
+    d1_ema  = d1["ema200"].iloc[-1]
+
+    for val in [curr["ema21"], curr["atr"], curr["rsi"], curr["adx"], h4_ema, d1_ema]:
+        if pd.isna(val):
+            return None, None
+
+    if curr["atr"] < MIN_ATR:
+        return None, None
+    if curr["adx"] < 20:
+        return None, None
+
+    price       = curr["close"]
+    recent_high = h1["high"].iloc[-22:-2].max()
+    recent_low  = h1["low"].iloc[-22:-2].min()
+    rsi         = curr["rsi"]
+
+    # All three timeframes must agree on direction
+    if price > curr["ema21"] and price > h4_ema and price > d1_ema:
+        if rsi > 65:
+            return None, None
+        if price >= recent_high * 0.999:
+            return None, None
+        return "BUY", curr["atr"]
+
+    if price < curr["ema21"] and price < h4_ema and price < d1_ema:
+        if rsi < 35:
+            return None, None
+        if price <= recent_low * 1.001:
+            return None, None
+        return "SELL", curr["atr"]
+
+    return None, None
+
+
+def run_h1_strategy(dry_run: bool = False):
+    """
+    Strategy 3: runs at 13:02 UTC daily (NY open).
+    Places 1 trade if positions are available.
+    """
+    global _h1_strat_last_date
+
+    today = _today_utc()
+    if _h1_strat_last_date == today:
+        return
+
+    log.info("─" * 60)
+    log.info(f"H1 Strategy check  {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
+
+    try:
+        balance     = get_balance()
+        open_trades = get_open_trades()
+        n_open      = len(open_trades)
+
+        if n_open >= MAX_POSITIONS:
+            log.info(f"  H1 Strategy: max positions reached ({MAX_POSITIONS}) — skipping")
+            _h1_strat_last_date = today
+            return
+
+        open_insts = {t["instrument"] for t in open_trades}
+
+        placed = False
+        for instrument in FALLBACK_PAIRS:
+            if instrument in open_insts:
+                continue
+
+            try:
+                signal, atr = get_h1_signal(instrument)
+            except Exception as e:
+                log.warning(f"  H1 Strategy {instrument}: error — {e}")
+                continue
+
+            if signal is None:
+                log.debug(f"  H1 Strategy {instrument}: no signal")
+                continue
+
+            if correlation_blocked(instrument, signal, open_trades):
+                log.info(f"  H1 Strategy {instrument}: {signal} blocked (correlation)")
+                continue
+
+            log.info(f"  H1 STRATEGY SIGNAL  {signal}  {instrument}  [1.0% risk]")
+            place_order(instrument, signal, atr, FALLBACK_RISK, balance, dry_run=dry_run)
+            placed = True
+            break
+
+        if not placed:
+            log.info("  H1 Strategy: no valid setup found today")
+
+        _h1_strat_last_date = today
+
+    except V20Error as e:
+        log.error(f"H1 Strategy OANDA API error: {e} — will retry next hour")
+    except Exception as e:
+        log.error(f"H1 Strategy unexpected error: {e} — will retry next hour")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # ENTRY POINT
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -732,8 +865,12 @@ def main():
     # Fallback strategy: runs once per day at 07:02 UTC (London open)
     schedule.every().day.at("07:02").do(run_fallback, dry_run=args.dry)
 
+    # Strategy 3 (H1 Momentum): runs once per day at 13:02 UTC (NY open)
+    schedule.every().day.at("13:02").do(run_h1_strategy, dry_run=args.dry)
+
     log.info("Scheduler running — main strategy every hour at :02")
-    log.info("                  — fallback strategy daily at 07:02 UTC")
+    log.info("                  — Strategy 2 (H4 fallback) daily at 07:02 UTC")
+    log.info("                  — Strategy 3 (H1 momentum) daily at 13:02 UTC")
     log.info("Press Ctrl+C to stop\n")
 
     # Run immediately on start too
