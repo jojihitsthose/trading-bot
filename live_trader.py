@@ -478,10 +478,8 @@ def run_signals(dry_run: bool = False):
         # Detect any trades that closed since last check
         check_for_closed_trades(open_trades)
 
-        # Catch-up: run strategies if they haven't fired today
+        # Catch-up: run S3 if it hasn't fired today and it's past 13:00 UTC
         now_utc = datetime.now(timezone.utc)
-        if now_utc.hour >= 7 and _fallback_last_date != _today_utc():
-            run_fallback(dry_run=dry_run)
         if now_utc.hour >= 13 and _h1_strat_last_date != _today_utc():
             run_h1_strategy(dry_run=dry_run)
 
@@ -862,14 +860,10 @@ def main():
     # Schedule: main strategy runs at :02 past every hour
     schedule.every().hour.at(":02").do(run_signals, dry_run=args.dry)
 
-    # Fallback strategy: runs once per day at 07:02 UTC (London open)
-    schedule.every().day.at("07:02").do(run_fallback, dry_run=args.dry)
-
     # Strategy 3 (H1 Momentum): runs once per day at 13:02 UTC (NY open)
     schedule.every().day.at("13:02").do(run_h1_strategy, dry_run=args.dry)
 
-    log.info("Scheduler running — main strategy every hour at :02")
-    log.info("                  — Strategy 2 (H4 fallback) daily at 07:02 UTC")
+    log.info("Scheduler running — Strategy 1 (RSI pullback) every hour at :02")
     log.info("                  — Strategy 3 (H1 momentum) daily at 13:02 UTC")
     log.info("Press Ctrl+C to stop\n")
 

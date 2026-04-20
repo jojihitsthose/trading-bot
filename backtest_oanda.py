@@ -556,27 +556,122 @@ def print_strategy_summary(label, trades_df, all_months, start_balance):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+def print_combined(label, df, all_months, start_balance):
+    if df.empty:
+        return
+    df_pnl, final_bal, max_dd = add_pnl(df.copy(), start_balance)
+    wins    = len(df_pnl[df_pnl["result"] == "WIN"])
+    losses  = len(df_pnl[df_pnl["result"] == "LOSS"])
+    timeout = len(df_pnl[df_pnl["result"] == "TIMEOUT"])
+    total   = len(df_pnl)
+    net     = final_bal - start_balance
+    net_pct = net / start_balance * 100
+    print(f"\n{'=' * 62}")
+    print(f"  {label}")
+    print(f"{'=' * 62}")
+    print(f"  Trades: {total}  ({wins}W / {losses}L / {timeout} timeout)  "
+          f"Win rate: {wins/total*100:.0f}%")
+    print(f"  Net P&L: ${net:+,.0f}  ({net_pct:+.1f}%)  |  "
+          f"Max drawdown: {max_dd:.1f}%  |  Final: ${final_bal:,.0f}")
+    print()
+    print(f"  {'Month':<10} {'Trades':>7} {'Win%':>6} {'P&L':>10} {'Balance':>10}")
+    running_bal = start_balance
+    for m in sorted(all_months):
+        mt = df_pnl[df_pnl["month"] == m]
+        if mt.empty:
+            continue
+        mw   = mt[mt["result"] == "WIN"]
+        mwr  = len(mw) / len(mt) * 100 if len(mt) > 0 else 0
+        mpnl = mt["pnl"].sum()
+        running_bal += mpnl
+        print(f"  {str(m):<10} {len(mt):>7} {mwr:>5.0f}%  "
+              f"${mpnl:>+8,.0f}  ${running_bal:>9,.0f}")
+
+
 def main():
-    print("=" * 60)
-    print("  BACKTEST — All 3 Strategies  (~7 months OANDA data)")
-    print("=" * 60)
+    print("=" * 62)
+    print("  FETCHING DATA...")
+    print("=" * 62)
 
-    all_trades = []
+    s1_trades = []
+    s2_trades = []
+    s3_trades = []
 
-    # ── Strategy 1: Main RSI Pullback ─────────────────────────────────────────
-    print("\n[Strategy 1 — Main RSI Pullback, H1 signal, 6 pairs]")
+    # ── Strategy 1 ────────────────────────────────────────────────────────────
+    print("\n[Strategy 1 — Main RSI Pullback, 6 pairs]")
     for name, instrument in PAIRS_S1.items():
         trades = backtest_s1_pair(name, instrument)
-        all_trades.extend(trades)
+        s1_trades.extend(trades)
 
-    # ── Strategy 3: H1 Momentum ───────────────────────────────────────────────
-    print("\n[Strategy 3 — H1 Momentum, NY open, 3 pairs]")
+    # ── Strategy 2 ────────────────────────────────────────────────────────────
+    print("\n[Strategy 2 — H4 Fallback, London open, 6 pairs]")
+    for instrument in PAIRS_S2_S3:
+        name = instrument.replace("_", "")
+        print(f"    {name}...", end=" ", flush=True)
+        trades = backtest_s2_pair(instrument)
+        print(f"{len(trades)} trades")
+        s2_trades.extend(trades)
+
+    # ── Strategy 3 ────────────────────────────────────────────────────────────
+    print("\n[Strategy 3 — H1 Momentum, NY open, 6 pairs]")
     for instrument in PAIRS_S2_S3:
         name = instrument.replace("_", "")
         print(f"    {name}...", end=" ", flush=True)
         trades = backtest_s3_pair(instrument)
         print(f"{len(trades)} trades")
-        all_trades.extend(trades)
+        s3_trades.extend(trades)
+
+    all_trades    = s1_trades + s2_trades + s3_trades
+    without_s2    = s1_trades + s3_trades
+
+    if not all_trades:
+        print("\nNo trades generated.")
+        return
+
+    df_with    = pd.DataFrame(all_trades)
+    df_without = pd.DataFrame(without_s2)
+
+    for df in [df_with, df_without]:
+        df["entry_time"] = pd.to_datetime(df["entry_time"])
+        df["month"]      = df["entry_time"].dt.to_period("M")
+
+    all_months = sorted(df_with["month"].unique())
+
+    # ── Side-by-side comparison ───────────────────────────────────────────────
+    print_combined(
+        f"WITHOUT Strategy 2  (S1 + S3 only)  — starting ${STARTING_BALANCE:,.0f}",
+        df_without, all_months, STARTING_BALANCE)
+
+    print_combined(
+        f"WITH Strategy 2     (S1 + S2 + S3)  — starting ${STARTING_BALANCE:,.0f}",
+        df_with, all_months, STARTING_BALANCE)
+
+    # ── Strategy 2 standalone damage ─────────────────────────────────────────
+    print(f"\n{'=' * 62}")
+    print("  Strategy 2 STANDALONE (what it adds/costs on its own)")
+    print(f"{'=' * 62}")
+    df_s2 = pd.DataFrame(s2_trades) if s2_trades else pd.DataFrame()
+    if not df_s2.empty:
+        df_s2["entry_time"] = pd.to_datetime(df_s2["entry_time"])
+        df_s2["month"]      = df_s2["entry_time"].dt.to_period("M")
+        df_s2_pnl, s2_final, s2_dd = add_pnl(df_s2.copy(), STARTING_BALANCE)
+        s2_net = s2_final - STARTING_BALANCE
+        wins   = len(df_s2_pnl[df_s2_pnl["result"] == "WIN"])
+        total  = len(df_s2_pnl)
+        print(f"  Trades: {total}  Win rate: {wins/total*100:.0f}%  "
+              f"Net P&L: ${s2_net:+,.0f}  Max drawdown: {s2_dd:.1f}%")
+        print()
+        print(f"  {'Month':<10} {'Trades':>7} {'Win%':>6} {'P&L':>10}")
+        running_bal = STARTING_BALANCE
+        for m in sorted(all_months):
+            mt = df_s2_pnl[df_s2_pnl["month"] == m]
+            if mt.empty:
+                continue
+            mw   = mt[mt["result"] == "WIN"]
+            mwr  = len(mw) / len(mt) * 100 if len(mt) > 0 else 0
+            mpnl = mt["pnl"].sum()
+            running_bal += mpnl
+            print(f"  {str(m):<10} {len(mt):>7} {mwr:>5.0f}%  ${mpnl:>+8,.0f}")
 
     if not all_trades:
         print("\nNo trades generated.")
