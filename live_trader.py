@@ -701,13 +701,13 @@ def main():
         run_signals(dry_run=args.dry)
         return
 
-    # Schedule: main strategy runs at :02 past every hour
-    schedule.every().hour.at(":02").do(run_signals, dry_run=args.dry)
+    # Schedule: main strategy scans every 15 minutes
+    schedule.every(15).minutes.do(run_signals, dry_run=args.dry)
 
     # Strategy 3 (H1 Momentum): runs once per day at 13:02 UTC (NY open)
     schedule.every().day.at("13:02").do(run_h1_strategy, dry_run=args.dry)
 
-    log.info("Scheduler running — Strategy 1 (RSI pullback) every hour at :02")
+    log.info("Scheduler running — Strategy 1 (RSI pullback) every 15 minutes")
     log.info("                  — Strategy 3 (H1 momentum) daily at 13:02 UTC")
     log.info("Press Ctrl+C to stop\n")
 
