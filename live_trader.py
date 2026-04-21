@@ -40,8 +40,8 @@ import oandapyV20.endpoints.accounts   as v20acct
 # ══════════════════════════════════════════════════════════════════════════════
 # CONFIG — fill in your API key and account ID here
 # ══════════════════════════════════════════════════════════════════════════════
-API_KEY    = os.environ.get("OANDA_API_KEY",    "a96040915699134d949c07f592b723c2-b883eecaeec7883a4c71b00c730b3593")
-ACCOUNT_ID = os.environ.get("OANDA_ACCOUNT_ID", "101-001-39095268-001")
+API_KEY    = "a96040915699134d949c07f592b723c2-b883eecaeec7883a4c71b00c730b3593"
+ACCOUNT_ID = "101-001-39095268-001"
 ENV        = "practice"   # "practice" = demo  |  "live" = real money
 
 # ── Strategy parameters (MaxIncome Lever 3) ───────────────────────────────────
