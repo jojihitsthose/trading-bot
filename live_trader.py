@@ -478,9 +478,9 @@ def run_signals(dry_run: bool = False):
         # Detect any trades that closed since last check
         check_for_closed_trades(open_trades)
 
-        # Catch-up: run S3 if it hasn't fired today and it's past 13:00 UTC
+        # Catch-up: run S3 if it hasn't fired today and it's past 09:00 UTC
         now_utc = datetime.now(timezone.utc)
-        if now_utc.hour >= 13 and _h1_strat_last_date != _today_utc():
+        if now_utc.hour >= 9 and _h1_strat_last_date != _today_utc():
             run_h1_strategy(dry_run=dry_run)
 
         log.info(f"  Balance: ${balance:,.2f}  |  Open trades: {n_open}/{MAX_POSITIONS}")
@@ -543,8 +543,8 @@ def _today_utc() -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STRATEGY 3 — H1 Momentum (NY Open)
-# Fires once per day at 13:02 UTC (NY open) if fewer than 2 positions are open.
+# STRATEGY 3 — H1 Momentum (London/EU Open)
+# Fires once per day at 09:02 UTC (London open) if fewer than 2 positions are open.
 # Uses H1 ATR for tighter SL/TP — faster resolution than Strategy 2.
 # Direction confirmed by H4 EMA21 + D1 EMA200.
 # ══════════════════════════════════════════════════════════════════════════════
@@ -614,7 +614,7 @@ def get_h1_signal(instrument: str):
 
 def run_h1_strategy(dry_run: bool = False):
     """
-    Strategy 3: runs at 13:02 UTC daily (NY open).
+    Strategy 3: runs at 09:02 UTC daily (London open).
     Scans ALL 6 pairs and enters every valid signal found — no position cap.
     """
     global _h1_strat_last_date
@@ -704,11 +704,11 @@ def main():
     # Schedule: main strategy scans every 15 minutes
     schedule.every(15).minutes.do(run_signals, dry_run=args.dry)
 
-    # Strategy 3 (H1 Momentum): runs once per day at 13:02 UTC (NY open)
-    schedule.every().day.at("13:02").do(run_h1_strategy, dry_run=args.dry)
+    # Strategy 3 (H1 Momentum): runs once per day at 09:02 UTC (London/EU open)
+    schedule.every().day.at("09:02").do(run_h1_strategy, dry_run=args.dry)
 
     log.info("Scheduler running — Strategy 1 (RSI pullback) every 15 minutes")
-    log.info("                  — Strategy 3 (H1 momentum) daily at 13:02 UTC")
+    log.info("                  — Strategy 3 (H1 momentum) daily at 09:02 UTC")
     log.info("Press Ctrl+C to stop\n")
 
     # Run immediately on start too
