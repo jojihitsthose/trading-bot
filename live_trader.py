@@ -44,6 +44,10 @@ API_KEY    = "a96040915699134d949c07f592b723c2-b883eecaeec7883a4c71b00c730b3593"
 ACCOUNT_ID = "101-001-39095268-001"
 ENV        = "practice"   # "practice" = demo  |  "live" = real money
 
+# ── Telegram notifications ────────────────────────────────────────────────────
+TELEGRAM_TOKEN   = "8295894132:AAGVD3E8L-YKsAgBZj9r_-O3gGvKb_huytI"
+TELEGRAM_CHAT_ID = "6756173967"
+
 # ── Strategy parameters (MaxIncome Lever 3) ───────────────────────────────────
 PAIRS = {
     "EURUSD": "EUR_USD",
@@ -93,6 +97,20 @@ logging.basicConfig(
     ],
 )
 log = logging.getLogger(__name__)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TELEGRAM NOTIFICATIONS
+# ══════════════════════════════════════════════════════════════════════════════
+import requests as _requests
+
+def send_telegram(msg: str):
+    """Send a message to the configured Telegram chat. Silently fails on error."""
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        _requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": msg}, timeout=10)
+    except Exception:
+        pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -414,8 +432,17 @@ def place_order(instrument: str, signal: str, atr: float,
         filled_price = fill.get("price", "?")
         trade_id     = fill.get("tradeOpened", {}).get("tradeID", "?")
         log.info(f"    Order filled  tradeID={trade_id}  filled@{filled_price}")
+        send_telegram(
+            f"🟢 TRADE OPENED\n"
+            f"{signal} {instrument}\n"
+            f"Entry: {filled_price}\n"
+            f"SL: {sl_price:.{dec}f}  |  TP: {tp_price:.{dec}f}\n"
+            f"Risk: ${risk_usd:.0f}  |  Units: {units}\n"
+            f"TradeID: {trade_id}"
+        )
     except V20Error as e:
         log.error(f"    Order failed for {instrument}: {e}")
+        send_telegram(f"⚠️ ORDER FAILED\n{signal} {instrument}\nError: {e}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -462,6 +489,25 @@ def check_for_closed_trades(current_open: list):
     closed_ids = _known_trade_ids - current_ids
     for tid in closed_ids:
         log.info(f"  TRADE CLOSED  tradeID={tid}  (hit SL, TP, or closed manually)")
+        # Fetch closed trade details for P&L notification
+        try:
+            r = v20trades.TradeDetails(ACCOUNT_ID, tid)
+            client.request(r)
+            td         = r.response.get("trade", {})
+            instrument = td.get("instrument", "?")
+            pnl        = float(td.get("realizedPL", 0))
+            close_px   = td.get("averageClosePrice", "?")
+            open_px    = td.get("price", "?")
+            units      = td.get("initialUnits", "?")
+            emoji      = "✅" if pnl >= 0 else "🔴"
+            send_telegram(
+                f"{emoji} TRADE CLOSED\n"
+                f"{instrument}  TradeID: {tid}\n"
+                f"Entry: {open_px}  |  Exit: {close_px}\n"
+                f"P&L: ${pnl:+,.2f}"
+            )
+        except Exception:
+            send_telegram(f"🔔 TRADE CLOSED  TradeID: {tid}")
 
     _known_trade_ids = current_ids
 
