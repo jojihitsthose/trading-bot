@@ -64,7 +64,7 @@ ADX_WEAK       = 28
 ADX_STRONG     = 36
 RSI_OVERSOLD   = 40
 RSI_OVERBOUGHT = 60
-ATR_SL_MULT    = 2.0      # stop loss = entry ± ATR × 2.0
+ATR_SL_MULT    = 1.2      # stop loss = entry ± ATR × 1.2
 RR_HARD_TP     = 2.0      # take profit = entry ± SL_dist × 2.0
 MAX_POSITIONS  = 3        # max simultaneous open positions
 SESSION_START  = 7        # UTC — London open
@@ -580,7 +580,7 @@ def run_signals(dry_run: bool = False):
         log.error(f"Unexpected error in run_signals: {e} — will retry next hour")
 
 
-S3_RISK  = 0.030   # 3.0% risk per trade
+S3_RISK  = 0.050   # 5.0% risk per trade
 S3_PAIRS = ["EUR_USD", "GBP_USD", "USD_CAD", "AUD_USD", "NZD_USD", "GBP_JPY"]
 
 

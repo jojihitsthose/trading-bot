@@ -35,7 +35,7 @@ PAIRS_S2_S3 = ["EUR_USD", "GBP_USD", "USD_CAD", "AUD_USD", "NZD_USD", "GBP_JPY"]
 ADX_WEAK       = 28
 RSI_OVERSOLD   = 40
 RSI_OVERBOUGHT = 60
-ATR_SL_MULT    = 2.0
+ATR_SL_MULT    = 1.2
 RR_HARD_TP     = 2.0
 SESSION_START  = 7
 SESSION_END    = 21
@@ -44,7 +44,7 @@ MAX_BARS_HELD  = 72   # backtest time-stop (3 days on H1, 12 days on H4)
 
 STARTING_BALANCE = 98_946.0   # USD — actual account balance
 RISK_S1          = 0.030      # 3.0% per S1 trade
-RISK_S2_S3       = 0.030      # 3.0% per S3 trade
+RISK_S2_S3       = 0.050      # 5.0% per S3 trade
 
 client = API(access_token=API_KEY, environment=ENV)
 
