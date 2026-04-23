@@ -17,6 +17,7 @@ import glob
 import logging
 import argparse
 import importlib.util
+import threading
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -357,6 +358,19 @@ def main():
 
     log.info("Paper trader running — scanning every 15 min + daily at 09:02 UTC")
     log.info(f"Strategies: {', '.join(mod.NAME for mod in STRATEGIES.values())}")
+
+    # Start the dashboard in a background thread
+    try:
+        from paper_dashboard import app
+        port = int(os.environ.get("PORT", 5051))
+        dashboard_thread = threading.Thread(
+            target=lambda: app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False),
+            daemon=True,
+        )
+        dashboard_thread.start()
+        log.info(f"Dashboard running on port {port}")
+    except Exception as e:
+        log.warning(f"Dashboard failed to start: {e}")
 
     # Run immediately on start
     scan_strategies("15min")
