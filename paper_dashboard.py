@@ -22,7 +22,7 @@ import paper_db as db
 
 API_KEY = os.environ.get("OANDA_API_KEY", "a96040915699134d949c07f592b723c2-b883eecaeec7883a4c71b00c730b3593")
 ENV     = os.environ.get("OANDA_ENV",     "practice")
-PORT    = int(os.environ.get("PORT", 5051))
+PORT    = 8080
 
 client = API(access_token=API_KEY, environment=ENV)
 app    = Flask(__name__)
