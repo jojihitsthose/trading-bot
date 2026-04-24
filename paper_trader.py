@@ -356,24 +356,9 @@ def main():
     schedule.every().day.at("21:00").do(send_daily_summary)
     schedule.every().hour.do(save_equity_snapshots)
 
-    # Start Flask dashboard FIRST so Railway health checks pass immediately
-    try:
-        from paper_dashboard import app
-        port = int(os.environ.get("PORT", 5051))
-        dashboard_thread = threading.Thread(
-            target=lambda: app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False),
-            daemon=True,
-        )
-        dashboard_thread.start()
-        log.info(f"Dashboard running on port {port}")
-    except Exception as e:
-        log.warning(f"Dashboard failed to start: {e}")
-
     log.info("Paper trader running — scanning every 15 min + daily at 09:02 UTC")
     log.info(f"Strategies: {', '.join(mod.NAME for mod in STRATEGIES.values())}")
 
-    # Run initial scan after Flask is up
-    time.sleep(2)
     scan_strategies("15min")
     now_utc = datetime.now(timezone.utc)
     if now_utc.hour >= 9:

@@ -298,6 +298,31 @@ def health():
 
 
 if __name__ == "__main__":
+    import threading
     db.init_db()
-    print(f"Dashboard running on http://localhost:{PORT}")
+
+    # Start the paper trader scanner in a background thread
+    def start_scanner():
+        import paper_trader
+        paper_trader.db.init_db()
+        paper_trader.load_strategies()
+        if paper_trader.STRATEGIES:
+            import schedule, time
+            from datetime import datetime, timezone
+            schedule.every(15).minutes.do(paper_trader.scan_strategies, interval_filter="15min")
+            schedule.every().day.at("09:02").do(paper_trader.scan_strategies, interval_filter="daily_09:02")
+            schedule.every().day.at("21:00").do(paper_trader.send_daily_summary)
+            schedule.every().hour.do(paper_trader.save_equity_snapshots)
+            paper_trader.scan_strategies("15min")
+            if datetime.now(timezone.utc).hour >= 9:
+                paper_trader.scan_strategies("daily_09:02")
+            paper_trader.save_equity_snapshots()
+            while True:
+                schedule.run_pending()
+                time.sleep(30)
+
+    scanner_thread = threading.Thread(target=start_scanner, daemon=True)
+    scanner_thread.start()
+
+    print(f"Paper trading system starting on port {PORT}")
     app.run(host="0.0.0.0", port=PORT, debug=False)
