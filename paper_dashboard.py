@@ -301,6 +301,12 @@ if __name__ == "__main__":
     import threading
     db.init_db()
 
+    # Seed DB from OANDA trade history on startup
+    try:
+        import import_oanda_trades  # runs the import automatically
+    except Exception as e:
+        print(f"Trade history import warning: {e}")
+
     # Start the paper trader scanner in a background thread
     def start_scanner():
         import paper_trader

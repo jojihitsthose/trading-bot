@@ -63,6 +63,15 @@ for t in closed:
         skipped += 1
         continue
 
+    # Skip if already imported (match by opened_at + instrument)
+    existing = conn.execute(
+        "SELECT id FROM paper_trades WHERE instrument=? AND opened_at=?",
+        (inst, opened_at)
+    ).fetchone()
+    if existing:
+        skipped += 1
+        continue
+
     # Approximate risk_usd: for a loss it's abs(pnl), for a win it's pnl/2
     if pnl < 0:
         risk_usd = abs(pnl)
